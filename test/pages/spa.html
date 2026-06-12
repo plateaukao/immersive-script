@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>SPA Simulation — imtx test</title>
+<style>
+  body { max-width: 720px; margin: 2rem auto; font: 16px/1.6 -apple-system, sans-serif; padding: 0 1rem; }
+  button { padding: 0.5em 1em; margin-right: 0.5em; }
+  #app { margin-top: 1.5rem; }
+</style>
+</head>
+<body>
+<h1>SPA / Dynamic Content Test</h1>
+<p>This page injects content after load to exercise the MutationObserver. Articles auto-append every 3 seconds; the buttons simulate single-page-app navigation that replaces the whole view.</p>
+
+<button id="nav-a">View A (replace content)</button>
+<button id="nav-b">View B (replace content)</button>
+<button id="add">Append one article now</button>
+
+<div id="app"></div>
+
+<script>
+  const app = document.getElementById('app');
+  let counter = 0;
+
+  function article(title, body) {
+    const el = document.createElement('article');
+    const h = document.createElement('h2');
+    h.textContent = title;
+    const p = document.createElement('p');
+    p.textContent = body;
+    el.append(h, p);
+    return el;
+  }
+
+  function addOne() {
+    counter++;
+    app.appendChild(article(
+      `Dynamically injected article number ${counter}`,
+      `This paragraph was inserted ${counter * 3} seconds after page load by a timer, simulating an infinite-scroll feed. It must be picked up by the MutationObserver and translated exactly once, with no duplicate translation blocks.`
+    ));
+  }
+
+  function renderView(name) {
+    history.pushState({}, '', '#' + name.toLowerCase());
+    app.replaceChildren(article(
+      `Welcome to view ${name}`,
+      `You navigated to view ${name} using pushState, which replaced the entire application container. Previously translated nodes were destroyed; this new paragraph must be detected and translated fresh, while the in-memory cache should make repeated A/B switching cost zero additional API requests.`
+    ));
+  }
+
+  document.getElementById('nav-a').onclick = () => renderView('A');
+  document.getElementById('nav-b').onclick = () => renderView('B');
+  document.getElementById('add').onclick = addOne;
+
+  addOne();
+  setInterval(() => { if (counter < 10) addOne(); }, 3000);
+</script>
+</body>
+</html>

@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Code Blocks — imtx test</title>
+<style>
+  body { max-width: 720px; margin: 2rem auto; font: 16px/1.6 -apple-system, sans-serif; padding: 0 1rem; }
+  pre { background: #f5f5f5; padding: 1em; overflow-x: auto; }
+  code { background: #f0f0f0; padding: 0 3px; }
+  textarea { width: 100%; height: 60px; }
+  [contenteditable] { border: 1px dashed #aaa; padding: 0.5em; }
+</style>
+</head>
+<body>
+<h1>Exclusion Test: Code, Inputs, Editable Regions</h1>
+
+<p>This paragraph of ordinary prose should be translated. It surrounds several elements that must remain completely untouched by the translator, verifying the scanner's exclusion rules.</p>
+
+<pre><code>function shouldNeverBeTranslated() {
+  // This entire pre/code block must remain untouched.
+  return "The quick brown fox jumps over the lazy dog";
+}</code></pre>
+
+<p>Prose between code blocks should still be translated, including sentences that mention inline code such as <code>document.querySelector</code> — the surrounding sentence is fair game even though standalone code blocks are not.</p>
+
+<pre>
+Plain pre-formatted text without a code tag.
+It should also be excluded from translation entirely.
+</pre>
+
+<h2>Form Controls</h2>
+<p>The textarea and input below contain English text but are form controls, so their contents must never be modified or translated.</p>
+<textarea>This text lives inside a textarea and must never be translated.</textarea>
+<p><input type="text" size="60" value="This input value must never be translated."></p>
+
+<h2>Editable Region</h2>
+<div contenteditable="true">This div is contenteditable, simulating a comment box or rich text editor. Injecting a translation here would corrupt user input, so it must be skipped.</div>
+
+<p>Finally, one more normal paragraph after all the excluded regions, confirming that the scanner resumes correctly and translates ordinary content that follows excluded subtrees.</p>
+</body>
+</html>

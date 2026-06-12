@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Static Article — imtx test</title>
+<style>
+  body { max-width: 720px; margin: 2rem auto; font: 16px/1.6 Georgia, serif; padding: 0 1rem; }
+  blockquote { border-left: 3px solid #ccc; padding-left: 1em; color: #555; }
+  nav { background: #f4f4f4; padding: 0.5em 1em; }
+</style>
+</head>
+<body>
+<nav>
+  <a href="#">Home</a> · <a href="#">Articles</a> · This navigation bar should never be translated because nav is excluded.
+</nav>
+
+<h1>The History of Mechanical Clocks</h1>
+<p class="byline">A short test article — every paragraph here is long enough to qualify as a translation unit.</p>
+
+<h2>Early Beginnings</h2>
+<p>The first mechanical clocks appeared in Europe around the start of the fourteenth century. They were large, weight-driven machines installed in church towers, and they struck the hours for an entire town to hear.</p>
+<p>These early devices had no faces or hands. Instead, they existed purely to ring bells, which is reflected in the word "clock" itself — it derives from the medieval Latin <em>clocca</em>, meaning <strong>bell</strong>. This paragraph contains <a href="https://en.wikipedia.org/wiki/Clock">an inline link</a> and inline formatting to verify that the original formatting is preserved above the plain-text translation.</p>
+
+<h2>The Pendulum Revolution</h2>
+<p>In 1656, Christiaan Huygens built the first pendulum clock, improving accuracy from about fifteen minutes of drift per day to roughly fifteen seconds. It was one of the largest single leaps in the history of timekeeping.</p>
+<blockquote>The pendulum clock remained the world's most precise timekeeper for nearly three hundred years, until the invention of quartz oscillators in the twentieth century.</blockquote>
+
+<h2>Key Properties of a Good Escapement</h2>
+<ul>
+  <li>It must deliver impulses to the pendulum with minimal interference to its natural swing.</li>
+  <li>It must count oscillations reliably across changes in temperature and humidity.</li>
+  <li>It should be manufacturable with the tooling available to a small workshop.</li>
+  <li>Short item</li>
+</ul>
+<p class="note">The list item "Short item" above is below the minimum text length and should be skipped, as should this CJK paragraph below.</p>
+<p>機械鐘錶的歷史悠久，這一段已經是繁體中文，因此應該被語言偵測跳過，不會送出任何翻譯請求。</p>
+
+<h2>A Long Tail for Scroll Testing</h2>
+<p>Everything below exists to make the page tall, so that lazy viewport-driven translation can be observed: paragraphs should only be translated as you scroll near them, visible as separate network requests in devtools.</p>
+<div id="filler"></div>
+<script>
+  const filler = document.getElementById('filler');
+  for (let i = 1; i <= 40; i++) {
+    const p = document.createElement('p');
+    p.textContent = `Filler paragraph number ${i}. It contains enough English text to qualify for translation, and it exists so that scrolling down the page triggers lazy translation of newly visible content.`;
+    filler.appendChild(p);
+  }
+</script>
+</body>
+</html>

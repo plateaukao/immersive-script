@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>GM-shim Harness — imtx automated smoke test</title>
+<style>body { max-width: 720px; margin: 1rem auto; font: 15px/1.5 sans-serif; }</style>
+</head>
+<body>
+<h1>Harness: runs the real userscript with GM shims</h1>
+
+<p id="t1">The first English paragraph that is comfortably longer than the minimum text length threshold.</p>
+<p id="t2">A second English paragraph, also long enough, containing <a href="#">an inline link</a> and <strong>bold text</strong> to verify formatting survives in the original.</p>
+<p id="t3">A third English paragraph to make sure multiple segments are packed into a single batched API request.</p>
+<ul>
+  <li id="t4">A list item with plenty of English words so that it also qualifies for translation.</li>
+  <li id="short">Too short.</li>
+</ul>
+<p id="zh">這一段已經是繁體中文的內容，語言偵測應該將它跳過，完全不送出任何翻譯請求才對。</p>
+<pre id="code"><code>function untouched() { return "never translate code blocks"; }</code></pre>
+<div id="dyn-target"></div>
+
+<script>
+  // ---- GM_* shims (just enough for the userscript to run in a plain page) ----
+  const _store = {
+    'imtx:settings': JSON.stringify({
+      apiBaseUrl: 'http://localhost:8787/v1',
+      apiKeys: 'test',
+      batchSize: 4,
+      debug: true,
+    }),
+  };
+  window.GM_getValue = (k, d) => (k in _store ? _store[k] : d);
+  window.GM_setValue = (k, v) => { _store[k] = v; };
+  window.GM_addStyle = (css) => {
+    const s = document.createElement('style');
+    s.textContent = css;
+    document.head.appendChild(s);
+  };
+  window.GM_registerMenuCommand = () => {};
+  window.GM_xmlhttpRequest = (opts) => {
+    fetch(opts.url, { method: opts.method, headers: opts.headers, body: opts.data })
+      .then(async (res) => {
+        const text = await res.text();
+        const headers = [...res.headers].map(([k, v]) => `${k}: ${v}`).join('\r\n');
+        opts.onload({ status: res.status, responseText: text, responseHeaders: headers });
+      })
+      .catch(() => opts.onerror && opts.onerror());
+  };
+</script>
+<script src="../immersive-translate-openai.user.js"></script>
+</body>
+</html>
