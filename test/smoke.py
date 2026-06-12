@@ -69,6 +69,25 @@ with sync_playwright() as p:
     check('dynamic paragraph translated exactly once',
           page.eval_on_selector('#dyn', 'e => e.querySelectorAll(".imtx-translation").length === 1'))
 
+    check('display style class applied (wavy)',
+          page.eval_on_selector('#t1 .imtx-translation',
+                                'e => e.classList.contains("imtx-style-wavy")'))
+
+    # --- floating button drag (default pos: right 16, bottom 96, 40px, 1280x720 vp) ---
+    page.mouse.move(1244, 604)
+    page.mouse.down()
+    page.mouse.move(640, 300, steps=10)
+    page.mouse.up()
+    pos = page.evaluate("JSON.parse(window.__gmStore['imtx:settings']).buttonPos")
+    check('drag persists button position',
+          pos is not None and abs(pos['right'] - 620) < 30 and abs(pos['bottom'] - 400) < 30)
+    check('drag does not toggle translation',
+          page.evaluate("!document.documentElement.classList.contains('imtx-hidden')"))
+    page.mouse.click(640, 300)
+    check('click at new position still toggles',
+          page.evaluate("document.documentElement.classList.contains('imtx-hidden')"))
+    page.mouse.click(640, 300)  # toggle back on
+
     # --- toggle off hides instantly, toggle on restores from DOM (no re-request) ---
     page.keyboard.press('Alt+KeyT')
     check('toggle off hides translations',

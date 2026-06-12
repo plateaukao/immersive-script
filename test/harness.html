@@ -26,9 +26,11 @@
       apiBaseUrl: 'http://localhost:8787/v1',
       apiKeys: 'test',
       batchSize: 4,
+      displayStyle: 'wavy',
       debug: true,
     }),
   };
+  window.__gmStore = _store; // exposed so the smoke test can inspect persisted settings
   window.GM_getValue = (k, d) => (k in _store ? _store[k] : d);
   window.GM_setValue = (k, v) => { _store[k] = v; };
   window.GM_addStyle = (css) => {

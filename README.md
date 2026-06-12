@@ -14,7 +14,8 @@ Inspired by the open-source [Immersive Translate userscript](https://greasyfork.
 - In-memory translation cache — toggling off/on or SPA re-renders cost zero extra requests
 - Rate limiting (5 req / 1.3 s), concurrency cap, retries with backoff, `Retry-After` support
 - Skips code blocks, `pre`, form controls, contenteditable, navigation, and already-Chinese text
-- Per-site auto-translate list, hotkey (`Alt+T` by default), floating button, GM menu commands
+- Per-site auto-translate list, hotkey (`Alt+T` by default), draggable floating button (position remembered), GM menu commands
+- Translation display styles: plain, faded, italic, dashed underline, dotted underline, wavy underline, or quote-style left border
 - E-ink friendly: no animations or transitions anywhere — the floating button shows a static `…` while requests are in flight, and the idle button has a solid black border for readability
 
 ## Install
@@ -31,6 +32,7 @@ Inspired by the open-source [Immersive Translate userscript](https://greasyfork.
 | Toggle translation | Click the floating button, press `Alt+T`, or use the userscript menu |
 | Open settings | Right-click the floating button, or userscript menu → Settings |
 | Always translate a site | Userscript menu → "Always translate this site (on/off)" |
+| Move the floating button | Drag it anywhere; the position is saved |
 | Retry a failed paragraph | Click the red "翻譯失敗 — 點擊重試" line |
 
 Settings of note:
@@ -39,6 +41,7 @@ Settings of note:
 - **API Key(s)** — comma-separate several keys to rotate randomly per request.
 - **Batch size** — paragraphs per request; set to `1` to disable batching entirely.
 - **Target language** — BCP-47 code; default `zh-TW`. When the target is Chinese, pages already in Chinese are skipped automatically.
+- **Translation style** — `none` | `faded` (dimmed) | `italic` | `dashed` | `dotted` | `wavy` | `quote` (left border).
 
 ## Development & Testing
 

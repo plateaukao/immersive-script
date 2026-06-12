@@ -3,7 +3,7 @@
 // @namespace    https://github.com/plateaukao/immersive-script
 // @homepageURL  https://github.com/plateaukao/immersive-script
 // @supportURL   https://github.com/plateaukao/immersive-script/issues
-// @version      0.1.1
+// @version      0.2.0
 // @description  Bilingual immersive web page translation via the OpenAI API or any OpenAI-compatible server
 // @author       Daniel Kao
 // @match        *://*/*
@@ -49,7 +49,8 @@
     batchSize: 10,                // max segments per chat request (1 disables batching)
     maxConcurrent: 2,
     minTextLength: 18,
-    displayStyle: 'none',         // none | dashed | quote
+    displayStyle: 'none',         // see DISPLAY_STYLES
+    buttonPos: null,              // {right, bottom} in px, set by dragging the floating button
     hotkey: 'Alt+T',
     autoDomains: [],              // hostnames, suffix-matched ("example.com" covers "www.example.com")
     debug: false,
@@ -61,6 +62,8 @@
     'Translate the text below to {{to}}:\n\n{{text}}';
   const BATCH_PROMPT_HEADER =
     'Translate each numbered segment below into {{to}}. Reply with the same %%N%% marker line before each translated segment, in the same order, and nothing else.';
+
+  const DISPLAY_STYLES = ['none', 'faded', 'italic', 'dashed', 'dotted', 'wavy', 'quote'];
 
   const LANG_NAMES = {
     'zh-TW': 'Traditional Chinese (zh-TW)',
@@ -549,9 +552,23 @@
       margin-top: 0.2em;
       unicode-bidi: isolate;
     }
+    .imtx-translation.imtx-style-faded {
+      opacity: 0.6;
+    }
+    .imtx-translation.imtx-style-italic {
+      font-style: italic;
+    }
     .imtx-translation.imtx-style-dashed {
       border-bottom: 1px dashed rgba(128, 128, 128, 0.66);
       padding-bottom: 0.1em;
+    }
+    .imtx-translation.imtx-style-dotted {
+      text-decoration: underline dotted rgba(128, 128, 128, 0.8);
+      text-underline-offset: 3px;
+    }
+    .imtx-translation.imtx-style-wavy {
+      text-decoration: underline wavy rgba(128, 128, 128, 0.7);
+      text-underline-offset: 3px;
     }
     .imtx-translation.imtx-style-quote {
       border-left: 3px solid rgba(128, 128, 128, 0.55);
@@ -586,7 +603,7 @@
     },
 
     applyStyle(w) {
-      w.classList.remove('imtx-style-dashed', 'imtx-style-quote');
+      DISPLAY_STYLES.forEach((s) => w.classList.remove('imtx-style-' + s));
       const style = S().displayStyle;
       if (style !== 'none') w.classList.add('imtx-style-' + style);
     },
@@ -643,7 +660,7 @@
       hint: 'Paragraphs per request; 1 disables batching' },
     { key: 'maxConcurrent', label: 'Max concurrent requests', type: 'number', min: '1', max: '8' },
     { key: 'minTextLength', label: 'Min paragraph length', type: 'number', min: '1', max: '500' },
-    { key: 'displayStyle', label: 'Translation style', type: 'select', options: ['none', 'dashed', 'quote'] },
+    { key: 'displayStyle', label: 'Translation style', type: 'select', options: DISPLAY_STYLES },
     { key: 'hotkey', label: 'Toggle hotkey', type: 'text', hint: 'e.g. Alt+T' },
     { key: 'systemPrompt', label: 'System prompt override', type: 'textarea',
       hint: 'Empty = built-in. {{to}} = target language. Batched requests need the %%N%% marker instruction.' },
@@ -672,7 +689,7 @@
         border: 2px solid #000;
         box-shadow: 0 2px 8px rgba(0,0,0,0.18);
         font-size: 18px; line-height: 36px; text-align: center;
-        cursor: pointer; user-select: none;
+        cursor: pointer; user-select: none; touch-action: none;
       }
       .btn.on { background: #2962ff; color: #fff; border-color: #2962ff; }
       .btn.error::before {
@@ -738,8 +755,11 @@
       btn = document.createElement('div');
       btn.className = 'btn';
       btn.textContent = '譯';
-      btn.title = 'Immersive Translate (click: toggle, right-click: settings)';
+      btn.title = 'Immersive Translate (click: toggle, drag: move, right-click: settings)';
+      const drag = makeDraggable(btn);
+      if (S().buttonPos) applyPos(clampPos(S().buttonPos.right, S().buttonPos.bottom));
       btn.addEventListener('click', () => {
+        if (drag.consume()) return; // a drag just ended, not a click
         if (btn.classList.contains('error')) {
           openSettings();
         } else {
@@ -757,6 +777,64 @@
       shadow.appendChild(toastEl);
 
       document.documentElement.appendChild(host);
+    }
+
+    const DRAG_THRESHOLD = 5; // px of movement before a press counts as a drag
+
+    function clampPos(right, bottom) {
+      return {
+        right: Math.min(Math.max(right, 0), window.innerWidth - 40),
+        bottom: Math.min(Math.max(bottom, 0), window.innerHeight - 40),
+      };
+    }
+
+    function applyPos(pos) {
+      btn.style.right = pos.right + 'px';
+      btn.style.bottom = pos.bottom + 'px';
+    }
+
+    function makeDraggable(el) {
+      let active = false, dragged = false;
+      let startX = 0, startY = 0, startRight = 0, startBottom = 0;
+      el.addEventListener('pointerdown', (e) => {
+        if (e.button !== 0) return;
+        active = true;
+        dragged = false; // every fresh press resets stale drag state
+        startX = e.clientX;
+        startY = e.clientY;
+        const r = el.getBoundingClientRect();
+        startRight = window.innerWidth - r.right;
+        startBottom = window.innerHeight - r.bottom;
+        el.setPointerCapture(e.pointerId);
+      });
+      el.addEventListener('pointermove', (e) => {
+        if (!active) return;
+        const dx = e.clientX - startX;
+        const dy = e.clientY - startY;
+        if (!dragged && Math.hypot(dx, dy) < DRAG_THRESHOLD) return;
+        dragged = true;
+        applyPos(clampPos(startRight - dx, startBottom - dy));
+      });
+      const end = () => {
+        if (!active) return;
+        active = false;
+        if (dragged) {
+          const r = el.getBoundingClientRect();
+          const pos = clampPos(window.innerWidth - r.right, window.innerHeight - r.bottom);
+          applyPos(pos);
+          Store.save({ buttonPos: pos });
+        }
+      };
+      el.addEventListener('pointerup', end);
+      el.addEventListener('pointercancel', end);
+      return {
+        // True exactly once after a drag, so the trailing click is ignored.
+        consume() {
+          const d = dragged;
+          dragged = false;
+          return d;
+        },
+      };
     }
 
     function fieldHtml(f, value) {
