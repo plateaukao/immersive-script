@@ -15,6 +15,7 @@ Inspired by the open-source [Immersive Translate userscript](https://greasyfork.
 - Rate limiting (5 req / 1.3 s), concurrency cap, retries with backoff, `Retry-After` support
 - Skips code blocks, `pre`, form controls, contenteditable, navigation, and already-Chinese text
 - Per-site auto-translate list, hotkey (`Alt+T` by default), floating button, GM menu commands
+- E-ink friendly: no animations or transitions anywhere — the floating button shows a static `…` while requests are in flight, and the idle button has a solid black border for readability
 
 ## Install
 

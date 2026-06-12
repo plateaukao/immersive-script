@@ -3,7 +3,7 @@
 // @namespace    https://github.com/plateaukao/immersive-script
 // @homepageURL  https://github.com/plateaukao/immersive-script
 // @supportURL   https://github.com/plateaukao/immersive-script/issues
-// @version      0.1.0
+// @version      0.1.1
 // @description  Bilingual immersive web page translation via the OpenAI API or any OpenAI-compatible server
 // @author       Daniel Kao
 // @match        *://*/*
@@ -559,15 +559,11 @@
     }
     .imtx-translation.imtx-loading {
       opacity: 0.5;
-      animation: imtx-pulse 1.2s ease-in-out infinite;
     }
     .imtx-translation.imtx-failed {
       color: #d33;
       cursor: pointer;
       font-size: 0.85em;
-    }
-    @keyframes imtx-pulse {
-      50% { opacity: 0.15; }
     }
     html.imtx-hidden .imtx-translation { display: none !important; }
   `);
@@ -667,29 +663,23 @@
     const CSS = `
       :host { all: initial; }
       * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
+      /* No animations or transitions anywhere: this script targets e-ink
+         devices, where every visual change forces a screen refresh. */
       .btn {
         position: fixed; right: 16px; bottom: 96px; z-index: 2147483646;
         width: 40px; height: 40px; border-radius: 50%;
-        background: #fff; color: #444;
-        border: 1px solid rgba(0,0,0,0.15);
+        background: #fff; color: #000;
+        border: 2px solid #000;
         box-shadow: 0 2px 8px rgba(0,0,0,0.18);
-        font-size: 18px; line-height: 38px; text-align: center;
+        font-size: 18px; line-height: 36px; text-align: center;
         cursor: pointer; user-select: none;
-        opacity: 0.55; transition: opacity 0.15s, background 0.15s, color 0.15s;
       }
-      .btn:hover { opacity: 1; }
-      .btn.on { background: #2962ff; color: #fff; border-color: #2962ff; opacity: 0.9; }
-      .btn.busy::after {
-        content: ""; position: absolute; inset: -4px;
-        border: 2px solid rgba(41, 98, 255, 0.25); border-top-color: #2962ff;
-        border-radius: 50%; animation: spin 0.9s linear infinite;
-      }
+      .btn.on { background: #2962ff; color: #fff; border-color: #2962ff; }
       .btn.error::before {
         content: ""; position: absolute; top: 0; right: 0;
         width: 10px; height: 10px; border-radius: 50%;
         background: #e53935; border: 2px solid #fff;
       }
-      @keyframes spin { to { transform: rotate(360deg); } }
 
       .overlay {
         position: fixed; inset: 0; z-index: 2147483647;
@@ -728,7 +718,7 @@
         background: #323232; color: #fff; border-radius: 6px;
         padding: 9px 16px; font-size: 13px;
         box-shadow: 0 4px 16px rgba(0,0,0,0.3);
-        opacity: 0; pointer-events: none; transition: opacity 0.25s;
+        opacity: 0; pointer-events: none;
       }
       .toast.show { opacity: 1; }
       .toast.err { background: #b71c1c; }
@@ -878,7 +868,10 @@
       openSettings,
       toast,
       setButtonOn(on) { btn.classList.toggle('on', on); },
-      setButtonBusy(busy) { btn.classList.toggle('busy', busy); },
+      setButtonBusy(busy) {
+        btn.classList.toggle('busy', busy);
+        btn.textContent = busy ? '…' : '譯'; // static indicator, no spinner
+      },
       setButtonError(err) { btn.classList.toggle('error', err); },
     };
   })();
