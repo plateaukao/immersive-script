@@ -5,7 +5,7 @@
 // @supportURL   https://github.com/plateaukao/immersive-script/issues
 // @updateURL    https://github.com/plateaukao/immersive-script/raw/refs/heads/main/immersive-translate-openai.user.js
 // @downloadURL  https://github.com/plateaukao/immersive-script/raw/refs/heads/main/immersive-translate-openai.user.js
-// @version      0.3.0
+// @version      0.3.1
 // @description  Bilingual immersive web page translation via the OpenAI API or any OpenAI-compatible server
 // @author       Daniel Kao
 // @match        *://*/*
@@ -790,8 +790,18 @@
 
       document.documentElement.appendChild(host);
       Store.onChange(wakeButton); // re-arm with new timeout/opacity after a save
-      wakeButton();               // start the idle countdown
+      dimButton();                // rest dimmed by default until first interaction
       if (S().debug) window.__imtxBtn = btn; // test hook (debug only)
+    }
+
+    // Resting state: dimmed (unless dimming is disabled). Applied on load so the
+    // button is unobtrusive until the user reaches for it.
+    function dimButton() {
+      clearTimeout(idleTimer);
+      if (S().idleDimSeconds > 0) {
+        btn.style.opacity = String(S().idleDimOpacity);
+        dimmed = true;
+      }
     }
 
     // Discrete opacity change only — no CSS transition, so e-ink refreshes once

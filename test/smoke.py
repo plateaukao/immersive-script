@@ -33,6 +33,10 @@ with sync_playwright() as p:
     page.on('console', lambda m: logs.append(m.text))
     page.goto(HARNESS)
 
+    # --- button rests dimmed by default (harness idleDimOpacity=0.25), no interaction yet ---
+    check('button dimmed by default on load',
+          page.evaluate("window.__imtxBtn && window.__imtxBtn.style.opacity") == '0.25')
+
     # --- toggle on via hotkey ---
     page.keyboard.press('Alt+KeyT')
     # 5 eligible units: the h1 heading plus t1-t4
@@ -74,15 +78,14 @@ with sync_playwright() as p:
                                 'e => e.classList.contains("imtx-style-wavy")'))
 
     # --- idle dim (harness: idleDimSeconds=1, idleDimOpacity=0.25); button at default pos ---
-    # The button is never touched by the hotkey toggle, so let it go idle and dim.
-    page.mouse.move(10, 10)
-    page.wait_for_timeout(1300)
-    check('button dims after idle timeout',
-          page.evaluate("window.__imtxBtn.style.opacity") == '0.25')
-    page.mouse.move(1244, 604)    # move over the button → wake it from dimmed
+    page.mouse.move(1244, 604)    # move over the button → wake it from the dimmed rest state
     page.wait_for_timeout(150)
-    check('button opaque again when interacted',
+    check('button opaque when interacted',
           page.evaluate("window.__imtxBtn.style.opacity") == '1')
+    page.mouse.move(10, 10)       # move away and let it idle
+    page.wait_for_timeout(1300)
+    check('button re-dims after idle timeout',
+          page.evaluate("window.__imtxBtn.style.opacity") == '0.25')
 
     # --- floating button drag (default pos: right 16, bottom 96, 40px, 1280x720 vp) ---
     page.mouse.move(1244, 604)

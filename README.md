@@ -42,7 +42,7 @@ Settings of note:
 - **Batch size** — paragraphs per request; set to `1` to disable batching entirely.
 - **Target language** — BCP-47 code; default `zh-TW`. When the target is Chinese, pages already in Chinese are skipped automatically.
 - **Translation style** — `none` | `faded` (dimmed) | `italic` | `dashed` | `dotted` | `wavy` | `quote` (left border).
-- **Dim button after / Dimmed button opacity** — the floating button dims to save attention (and e-ink contrast) after the set idle seconds (`0` = never); `0.3` opacity ≈ 70% transparent. Any interaction with the button restores it.
+- **Dim button after / Dimmed button opacity** — the floating button rests dimmed by default (so it's unobtrusive) and stays dimmed; any interaction restores full opacity, after which it re-dims once the idle seconds elapse (`0` = never dim). `0.3` opacity ≈ 70% transparent.
 
 ## Development & Testing
 
