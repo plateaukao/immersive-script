@@ -73,6 +73,17 @@ with sync_playwright() as p:
           page.eval_on_selector('#t1 .imtx-translation',
                                 'e => e.classList.contains("imtx-style-wavy")'))
 
+    # --- idle dim (harness: idleDimSeconds=1, idleDimOpacity=0.25); button at default pos ---
+    # The button is never touched by the hotkey toggle, so let it go idle and dim.
+    page.mouse.move(10, 10)
+    page.wait_for_timeout(1300)
+    check('button dims after idle timeout',
+          page.evaluate("window.__imtxBtn.style.opacity") == '0.25')
+    page.mouse.move(1244, 604)    # move over the button → wake it from dimmed
+    page.wait_for_timeout(150)
+    check('button opaque again when interacted',
+          page.evaluate("window.__imtxBtn.style.opacity") == '1')
+
     # --- floating button drag (default pos: right 16, bottom 96, 40px, 1280x720 vp) ---
     page.mouse.move(1244, 604)
     page.mouse.down()

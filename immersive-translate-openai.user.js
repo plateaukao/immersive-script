@@ -5,7 +5,7 @@
 // @supportURL   https://github.com/plateaukao/immersive-script/issues
 // @updateURL    https://github.com/plateaukao/immersive-script/raw/refs/heads/main/immersive-translate-openai.user.js
 // @downloadURL  https://github.com/plateaukao/immersive-script/raw/refs/heads/main/immersive-translate-openai.user.js
-// @version      0.2.1
+// @version      0.3.0
 // @description  Bilingual immersive web page translation via the OpenAI API or any OpenAI-compatible server
 // @author       Daniel Kao
 // @match        *://*/*
@@ -53,6 +53,8 @@
     minTextLength: 18,
     displayStyle: 'none',         // see DISPLAY_STYLES
     buttonPos: null,              // {right, bottom} in px, set by dragging the floating button
+    idleDimSeconds: 10,           // dim the floating button after this many idle seconds; 0 = never
+    idleDimOpacity: 0.3,          // opacity when dimmed (0.3 ≈ 70% transparent)
     hotkey: 'Alt+T',
     autoDomains: [],              // hostnames, suffix-matched ("example.com" covers "www.example.com")
     debug: false,
@@ -405,10 +407,9 @@
       while (!this.paused && this.inFlight < S().maxConcurrent && this.batchQueue.length) {
         const batch = this.batchQueue.shift();
         this.inFlight++;
-        UI.setButtonBusy(true);
+        // The floating button stays static during translation (e-ink friendly).
         this.dispatch(batch).finally(() => {
           this.inFlight--;
-          if (this.inFlight === 0) UI.setButtonBusy(false);
           this.pump();
         });
       }
@@ -663,6 +664,10 @@
     { key: 'maxConcurrent', label: 'Max concurrent requests', type: 'number', min: '1', max: '8' },
     { key: 'minTextLength', label: 'Min paragraph length', type: 'number', min: '1', max: '500' },
     { key: 'displayStyle', label: 'Translation style', type: 'select', options: DISPLAY_STYLES },
+    { key: 'idleDimSeconds', label: 'Dim button after (seconds)', type: 'number', min: '0', max: '600',
+      hint: 'Idle seconds before the floating button dims; 0 = never dim' },
+    { key: 'idleDimOpacity', label: 'Dimmed button opacity', type: 'number', step: '0.05', min: '0.05', max: '1',
+      hint: '0.3 ≈ 70% transparent; 1 = fully opaque' },
     { key: 'hotkey', label: 'Toggle hotkey', type: 'text', hint: 'e.g. Alt+T' },
     { key: 'systemPrompt', label: 'System prompt override', type: 'textarea',
       hint: 'Empty = built-in. {{to}} = target language. Batched requests need the %%N%% marker instruction.' },
@@ -678,6 +683,8 @@
     let panel = null;
     let toastEl = null;
     let toastTimer = null;
+    let idleTimer = null;
+    let dimmed = false;
 
     const CSS = `
       :host { all: initial; }
@@ -772,6 +779,9 @@
         e.preventDefault();
         openSettings();
       });
+      // Any interaction with the button wakes it from the dimmed idle state.
+      ['pointerenter', 'pointerdown', 'pointermove'].forEach((ev) =>
+        btn.addEventListener(ev, wakeButton));
       shadow.appendChild(btn);
 
       toastEl = document.createElement('div');
@@ -779,6 +789,29 @@
       shadow.appendChild(toastEl);
 
       document.documentElement.appendChild(host);
+      Store.onChange(wakeButton); // re-arm with new timeout/opacity after a save
+      wakeButton();               // start the idle countdown
+      if (S().debug) window.__imtxBtn = btn; // test hook (debug only)
+    }
+
+    // Discrete opacity change only — no CSS transition, so e-ink refreshes once
+    // per state change. Guarded so repeated pointer events (e.g. during a drag)
+    // don't repaint when already bright.
+    function wakeButton() {
+      if (dimmed) {
+        btn.style.opacity = '1';
+        dimmed = false;
+      }
+      clearTimeout(idleTimer);
+      const secs = S().idleDimSeconds;
+      if (secs > 0) {
+        idleTimer = setTimeout(() => {
+          btn.style.opacity = String(S().idleDimOpacity);
+          dimmed = true;
+        }, secs * 1000);
+      } else if (btn.style.opacity && btn.style.opacity !== '1') {
+        btn.style.opacity = '1'; // dimming disabled → ensure fully opaque
+      }
     }
 
     const DRAG_THRESHOLD = 5; // px of movement before a press counts as a drag
@@ -948,10 +981,6 @@
       openSettings,
       toast,
       setButtonOn(on) { btn.classList.toggle('on', on); },
-      setButtonBusy(busy) {
-        btn.classList.toggle('busy', busy);
-        btn.textContent = busy ? '…' : '譯'; // static indicator, no spinner
-      },
       setButtonError(err) { btn.classList.toggle('error', err); },
     };
   })();
@@ -1075,7 +1104,6 @@
       if (!this.enabled) return;
       this.enabled = false;
       UI.setButtonOn(false);
-      UI.setButtonBusy(false);
       document.documentElement.classList.add('imtx-hidden');
       if (this.io) this.io.disconnect();
       if (this.mo) this.mo.disconnect();

@@ -16,7 +16,7 @@ Inspired by the open-source [Immersive Translate userscript](https://greasyfork.
 - Skips code blocks, `pre`, form controls, contenteditable, navigation, and already-Chinese text
 - Per-site auto-translate list, hotkey (`Alt+T` by default), draggable floating button (position remembered), GM menu commands
 - Translation display styles: plain, faded, italic, dashed underline, dotted underline, wavy underline, or quote-style left border
-- E-ink friendly: no animations or transitions anywhere — the floating button shows a static `…` while requests are in flight, and the idle button has a solid black border for readability
+- E-ink friendly: no animations or transitions anywhere; the floating button stays completely static during translation, has a solid black border for readability, and dims after an idle timeout (both the delay and dimmed opacity are configurable)
 
 ## Install
 
@@ -42,6 +42,7 @@ Settings of note:
 - **Batch size** — paragraphs per request; set to `1` to disable batching entirely.
 - **Target language** — BCP-47 code; default `zh-TW`. When the target is Chinese, pages already in Chinese are skipped automatically.
 - **Translation style** — `none` | `faded` (dimmed) | `italic` | `dashed` | `dotted` | `wavy` | `quote` (left border).
+- **Dim button after / Dimmed button opacity** — the floating button dims to save attention (and e-ink contrast) after the set idle seconds (`0` = never); `0.3` opacity ≈ 70% transparent. Any interaction with the button restores it.
 
 ## Development & Testing
 
