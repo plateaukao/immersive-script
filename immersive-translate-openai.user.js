@@ -3,7 +3,9 @@
 // @namespace    https://github.com/plateaukao/immersive-script
 // @homepageURL  https://github.com/plateaukao/immersive-script
 // @supportURL   https://github.com/plateaukao/immersive-script/issues
-// @version      0.2.0
+// @updateURL    https://github.com/plateaukao/immersive-script/raw/refs/heads/main/immersive-translate-openai.user.js
+// @downloadURL  https://github.com/plateaukao/immersive-script/raw/refs/heads/main/immersive-translate-openai.user.js
+// @version      0.2.1
 // @description  Bilingual immersive web page translation via the OpenAI API or any OpenAI-compatible server
 // @author       Daniel Kao
 // @match        *://*/*
