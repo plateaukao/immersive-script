@@ -5,7 +5,7 @@
 // @supportURL   https://github.com/plateaukao/immersive-script/issues
 // @updateURL    https://github.com/plateaukao/immersive-script/raw/refs/heads/main/immersive-translate-openai.user.js
 // @downloadURL  https://github.com/plateaukao/immersive-script/raw/refs/heads/main/immersive-translate-openai.user.js
-// @version      0.3.1
+// @version      0.4.0
 // @description  Bilingual immersive web page translation via the OpenAI API or any OpenAI-compatible server
 // @author       Daniel Kao
 // @match        *://*/*
@@ -57,6 +57,7 @@
     idleDimOpacity: 0.3,          // opacity when dimmed (0.3 ≈ 70% transparent)
     hotkey: 'Alt+T',
     autoDomains: [],              // hostnames, suffix-matched ("example.com" covers "www.example.com")
+    hiddenButtonDomains: [],      // hostnames where the floating button is hidden (suffix-matched)
     debug: false,
   };
 
@@ -118,6 +119,27 @@
   }
   function langName(code) {
     return LANG_NAMES[code] || code;
+  }
+
+  // Primary language subtag, lowercased: "en-US" -> "en", "zh_TW" -> "zh".
+  function primarySubtag(code) {
+    return String(code || '').toLowerCase().split(/[-_]/)[0];
+  }
+
+  // The page's own declared language, from <html lang> or a content-language meta.
+  function pageLang() {
+    const htmlLang = (document.documentElement.getAttribute('lang') || '').trim();
+    if (htmlLang) return htmlLang;
+    const meta = document.querySelector('meta[http-equiv="content-language" i]');
+    const metaLang = meta && meta.getAttribute('content');
+    return (metaLang || '').split(',')[0].trim();
+  }
+
+  // True when the page is already in the target language (same primary subtag) —
+  // nothing to translate, so the floating button can stay hidden by default.
+  function pageLangIsTarget() {
+    const pl = primarySubtag(pageLang());
+    return !!pl && pl === primarySubtag(S().targetLang);
   }
 
   // ===================================================================
@@ -673,7 +695,9 @@
       hint: 'Empty = built-in. {{to}} = target language. Batched requests need the %%N%% marker instruction.' },
     { key: 'userPromptTemplate', label: 'User prompt override', type: 'textarea',
       hint: 'Single-paragraph requests only. {{to}}, {{text}}. Empty = built-in.' },
-    { key: 'autoDomains', label: 'Always-translate domains', type: 'textarea', hint: 'One hostname per line' },
+    { key: 'autoDomains', label: 'Always-translate domains', type: 'textarea', list: true, hint: 'One hostname per line' },
+    { key: 'hiddenButtonDomains', label: 'Hide-button domains', type: 'textarea', list: true,
+      hint: 'One hostname per line; the floating button is hidden on these sites' },
     { key: 'debug', label: 'Debug logging', type: 'checkbox' },
   ];
 
@@ -790,7 +814,9 @@
 
       document.documentElement.appendChild(host);
       Store.onChange(wakeButton); // re-arm with new timeout/opacity after a save
+      Store.onChange(refreshButtonVisibility); // hide/show when domains or target change
       dimButton();                // rest dimmed by default until first interaction
+      refreshButtonVisibility();  // hide on opted-out sites / already-target pages
       if (S().debug) window.__imtxBtn = btn; // test hook (debug only)
     }
 
@@ -822,6 +848,19 @@
       } else if (btn.style.opacity && btn.style.opacity !== '1') {
         btn.style.opacity = '1'; // dimming disabled → ensure fully opaque
       }
+    }
+
+    // The floating button is hidden on sites the user opted out of, and on pages
+    // already written in the target language (nothing to translate). The hotkey
+    // and userscript menu commands still work, so translation stays reachable.
+    function shouldHideButton() {
+      const list = S().hiddenButtonDomains || [];
+      if (list.some((d) => domainMatches(location.hostname, d))) return true;
+      return pageLangIsTarget();
+    }
+
+    function refreshButtonVisibility() {
+      if (btn) btn.style.display = shouldHideButton() ? 'none' : '';
     }
 
     const DRAG_THRESHOLD = 5; // px of movement before a press counts as a drag
@@ -891,7 +930,7 @@
           .join('');
         input = `<select id="${id}">${opts}</select>`;
       } else if (f.type === 'textarea') {
-        const v = f.key === 'autoDomains' ? (value || []).join('\n') : (value || '');
+        const v = f.list ? (value || []).join('\n') : (value || '');
         input = `<textarea id="${id}">${escapeHtml(v)}</textarea>`;
       } else if (f.type === 'checkbox') {
         input = `<input type="checkbox" id="${id}"${value ? ' checked' : ''}>`;
@@ -917,7 +956,7 @@
         const el = panel.querySelector('#f-' + f.key);
         if (f.type === 'checkbox') patch[f.key] = el.checked;
         else if (f.type === 'number') patch[f.key] = parseFloat(el.value) || DEFAULTS[f.key];
-        else if (f.key === 'autoDomains') {
+        else if (f.list) {
           patch[f.key] = el.value.split('\n').map((s) => s.trim()).filter(Boolean);
         } else patch[f.key] = el.value;
       }
@@ -990,6 +1029,7 @@
       mount,
       openSettings,
       toast,
+      refreshButtonVisibility,
       setButtonOn(on) { btn.classList.toggle('on', on); },
       setButtonError(err) { btn.classList.toggle('error', err); },
     };
@@ -1049,6 +1089,19 @@
         if (!Controller.enabled) Controller.toggle();
       }
       Store.save({ autoDomains: list });
+    });
+    GM_registerMenuCommand('Hide floating button on this site (on/off)', () => {
+      const host = location.hostname;
+      const list = (S().hiddenButtonDomains || []).slice();
+      const idx = list.findIndex((d) => domainMatches(host, d));
+      if (idx >= 0) {
+        list.splice(idx, 1);
+        UI.toast(`Floating button shown for ${host}`);
+      } else {
+        list.push(host);
+        UI.toast(`Floating button hidden for ${host}`);
+      }
+      Store.save({ hiddenButtonDomains: list }); // onChange refreshes button visibility
     });
     GM_registerMenuCommand('Settings', () => UI.openSettings());
   }

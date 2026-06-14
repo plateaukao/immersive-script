@@ -15,6 +15,7 @@ Inspired by the open-source [Immersive Translate userscript](https://greasyfork.
 - Rate limiting (5 req / 1.3 s), concurrency cap, retries with backoff, `Retry-After` support
 - Skips code blocks, `pre`, form controls, contenteditable, navigation, and already-Chinese text
 - Per-site auto-translate list, hotkey (`Alt+T` by default), draggable floating button (position remembered), GM menu commands
+- Smart floating button — hidden automatically on pages already in the target language (nothing to translate), and hideable per-site from the menu; the hotkey and menu commands keep working when it's hidden
 - Translation display styles: plain, faded, italic, dashed underline, dotted underline, wavy underline, or quote-style left border
 - E-ink friendly: no animations or transitions anywhere; the floating button stays completely static during translation, has a solid black border for readability, and dims after an idle timeout (both the delay and dimmed opacity are configurable)
 
@@ -32,6 +33,7 @@ Inspired by the open-source [Immersive Translate userscript](https://greasyfork.
 | Toggle translation | Click the floating button, press `Alt+T`, or use the userscript menu |
 | Open settings | Right-click the floating button, or userscript menu → Settings |
 | Always translate a site | Userscript menu → "Always translate this site (on/off)" |
+| Hide the floating button on a site | Userscript menu → "Hide floating button on this site (on/off)" |
 | Move the floating button | Drag it anywhere; the position is saved |
 | Retry a failed paragraph | Click the red "翻譯失敗 — 點擊重試" line |
 
@@ -40,7 +42,8 @@ Settings of note:
 - **API Base URL** — include the `/v1` (e.g. `https://api.openai.com/v1`, `http://localhost:1234/v1`). The script appends `/chat/completions`.
 - **API Key(s)** — comma-separate several keys to rotate randomly per request.
 - **Batch size** — paragraphs per request; set to `1` to disable batching entirely.
-- **Target language** — BCP-47 code; default `zh-TW`. When the target is Chinese, pages already in Chinese are skipped automatically.
+- **Target language** — BCP-47 code; default `zh-TW`. When the target is Chinese, pages already in Chinese are skipped automatically. When a page's declared language (`<html lang>` or a content-language meta) shares its primary subtag with the target (e.g. an `en-GB` page with target `en`), the floating button is hidden — there's nothing to translate.
+- **Hide-button domains** — one hostname per line; the floating button is hidden on these sites (also toggleable from the userscript menu). The hotkey and menu commands still work.
 - **Translation style** — `none` | `faded` (dimmed) | `italic` | `dashed` | `dotted` | `wavy` | `quote` (left border).
 - **Dim button after / Dimmed button opacity** — the floating button rests dimmed by default (so it's unobtrusive) and stays dimmed; any interaction restores full opacity, after which it re-dims once the idle seconds elapse (`0` = never dim). `0.3` opacity ≈ 70% transparent.
 
