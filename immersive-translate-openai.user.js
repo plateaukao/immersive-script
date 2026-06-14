@@ -5,7 +5,7 @@
 // @supportURL   https://github.com/plateaukao/immersive-script/issues
 // @updateURL    https://github.com/plateaukao/immersive-script/raw/refs/heads/main/immersive-translate-openai.user.js
 // @downloadURL  https://github.com/plateaukao/immersive-script/raw/refs/heads/main/immersive-translate-openai.user.js
-// @version      0.4.0
+// @version      0.4.1
 // @description  Bilingual immersive web page translation via the OpenAI API or any OpenAI-compatible server
 // @author       Daniel Kao
 // @match        *://*/*
@@ -53,7 +53,7 @@
     minTextLength: 18,
     displayStyle: 'none',         // see DISPLAY_STYLES
     buttonPos: null,              // {right, bottom} in px, set by dragging the floating button
-    idleDimSeconds: 10,           // dim the floating button after this many idle seconds; 0 = never
+    idleDimSeconds: 5,            // dim the floating button after this many idle seconds; 0 = never
     idleDimOpacity: 0.3,          // opacity when dimmed (0.3 ≈ 70% transparent)
     hotkey: 'Alt+T',
     autoDomains: [],              // hostnames, suffix-matched ("example.com" covers "www.example.com")
@@ -724,7 +724,8 @@
         font-size: 18px; line-height: 36px; text-align: center;
         cursor: pointer; user-select: none; touch-action: none;
       }
-      .btn.on { background: #2962ff; color: #fff; border-color: #2962ff; }
+      /* Translation on/off does not recolor the button (no blue), so e-ink
+         devices don't refresh the button on every toggle. */
       .btn.error::before {
         content: ""; position: absolute; top: 0; right: 0;
         width: 10px; height: 10px; border-radius: 50%;
