@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Mixed-content body (Naver-style) — imtx test</title>
+<style>body { max-width: 720px; margin: 1rem auto; font: 15px/1.5 sans-serif; }</style>
+</head>
+<body>
+<h1>Mixed-content body: bare text + &lt;br&gt;, no &lt;p&gt; wrappers</h1>
+
+<!-- Mirrors a Naver news article (#dic_area): an <article> whose body is loose
+     text nodes separated by <br><br>, sharing the element with a leading
+     block-level child (a media player). The real text has no <p> wrappers, so
+     the scanner must translate the article element's OWN inline text even though
+     it also contains a block child. Regression guard for the mixed-content fix. -->
+<article id="dic_area" class="go_trans">
+  <div class="player"><span>&#9654;</span></div>
+  First bare paragraph of the article body, with no paragraph wrapper, long enough to translate.<br><br>
+  Second bare paragraph, separated only by line breaks, exactly like a Naver news body.
+</article>
+
+<script>
+  // ---- GM_* shims (mirrors harness.html; enough to run the userscript) ----
+  const _store = {
+    'imtx:settings': JSON.stringify({
+      apiBaseUrl: 'http://localhost:8787/v1',
+      apiKeys: 'test',
+      batchSize: 4,
+      debug: true,
+    }),
+  };
+  window.__gmStore = _store;
+  window.GM_getValue = (k, d) => (k in _store ? _store[k] : d);
+  window.GM_setValue = (k, v) => { _store[k] = v; };
+  window.GM_addStyle = (css) => {
+    const s = document.createElement('style');
+    s.textContent = css;
+    document.head.appendChild(s);
+  };
+  window.GM_registerMenuCommand = () => {};
+  window.GM_xmlhttpRequest = (opts) => {
+    fetch(opts.url, { method: opts.method, headers: opts.headers, body: opts.data })
+      .then(async (res) => {
+        const text = await res.text();
+        const headers = [...res.headers].map(([k, v]) => `${k}: ${v}`).join('\r\n');
+        opts.onload({ status: res.status, responseText: text, responseHeaders: headers });
+      })
+      .catch(() => opts.onerror && opts.onerror());
+  };
+</script>
+<script src="../../immersive-translate-openai.user.js"></script>
+</body>
+</html>

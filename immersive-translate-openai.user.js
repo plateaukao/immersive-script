@@ -522,12 +522,21 @@
       return false;
     }
 
-    // Unit text, excluding any translation wrapper we previously injected.
+    // The element's own translatable text: direct text nodes plus inline-element
+    // descendants, but NOT block-level element children — each of those is its
+    // own unit. Skips excluded subtrees and any translation wrapper we injected.
+    // <br> becomes a space so loose paragraphs (e.g. Naver-style `text<br><br>text`
+    // bodies) don't run together. For a plain leaf (no block children) this is
+    // identical to its full text.
     function unitText(el) {
       let t = '';
       for (const n of el.childNodes) {
-        if (n.nodeType === 1 && n.classList && n.classList.contains('imtx-translation')) continue;
-        t += n.textContent;
+        if (n.nodeType === 3) { t += n.nodeValue; continue; }
+        if (n.nodeType !== 1) continue;
+        if (n.tagName === 'BR') { t += ' '; continue; }
+        if (n.classList && n.classList.contains('imtx-translation')) continue;
+        if (BLOCK_TAGS.has(n.tagName)) continue;
+        t += n.textContent; // inline element (a, span, strong, …) belongs to this unit
       }
       return t.replace(/\s+/g, ' ').trim();
     }
@@ -545,11 +554,18 @@
 
     function walk(el, out) {
       if (el.nodeType !== 1 || isExcluded(el)) return;
-      if (!hasBlockChild(el) && UNIT_TAGS.has(el.tagName)) {
-        maybeUnit(el, out);
-        return;
+      const blocky = hasBlockChild(el);
+      // A leaf block — or a block container that also holds its own loose text
+      // (e.g. <article><div>player</div>para<br><br>para</article>, as on Naver
+      // news) — gets translated as a unit from its own inline text. maybeUnit
+      // ignores it if that text is too short.
+      if (UNIT_TAGS.has(el.tagName)) maybeUnit(el, out);
+      // Descend into block-level children so nested blocks each become their own
+      // unit. A pure leaf (unit tag, no block children) is fully captured above,
+      // so we don't recurse into its inline children.
+      if (blocky || !UNIT_TAGS.has(el.tagName)) {
+        for (const child of el.children) walk(child, out);
       }
-      for (const child of el.children) walk(child, out);
     }
 
     return {

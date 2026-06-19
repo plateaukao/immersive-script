@@ -112,6 +112,26 @@ with sync_playwright() as p:
           page.evaluate("!document.documentElement.classList.contains('imtx-hidden') && "
                         "getComputedStyle(document.querySelector('.imtx-translation')).display === 'block'"))
 
+    # --- mixed-content body (Naver-style): bare text + <br>, sharing the element
+    #     with a leading block child. The article's own loose text must translate
+    #     even though #dic_area has a block-level child (the player div). ---
+    page.goto('http://localhost:8000/test/pages/naver-style.html')
+    page.wait_for_function("window.__imtxBtn", timeout=5000)
+    page.keyboard.press('Alt+KeyT')
+    page.wait_for_function(
+        "document.querySelector('#dic_area') && "
+        "document.querySelector('#dic_area').dataset.imtxState === 'done'", timeout=10000)
+    body_tr = page.eval_on_selector('#dic_area > .imtx-translation', 'e => e && e.textContent')
+    check('Naver-style article body translated as a unit', bool(body_tr) and body_tr.startswith('【譯】'))
+    # both bare paragraphs joined (br -> space), with the player block child skipped
+    check('article body text captured (bare paragraphs, br->space, player skipped)',
+          body_tr == '【譯】First bare paragraph of the article body, with no paragraph wrapper, '
+                     'long enough to translate. Second bare paragraph, separated only by line breaks, '
+                     'exactly like a Naver news body.')
+    check('player block child not double-translated (only one unit in #dic_area)',
+          page.eval_on_selector('#dic_area',
+                                'e => e.querySelectorAll(".imtx-translation").length === 1'))
+
     browser.close()
 
 print(f'\n{PASS} passed, {FAIL} failed')
