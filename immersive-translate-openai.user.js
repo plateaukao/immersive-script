@@ -5,7 +5,7 @@
 // @supportURL   https://github.com/plateaukao/immersive-script/issues
 // @updateURL    https://github.com/plateaukao/immersive-script/raw/refs/heads/main/immersive-translate-openai.user.js
 // @downloadURL  https://github.com/plateaukao/immersive-script/raw/refs/heads/main/immersive-translate-openai.user.js
-// @version      0.4.2
+// @version      0.5.0
 // @description  Bilingual immersive web page translation via the OpenAI API or any OpenAI-compatible server
 // @author       Daniel Kao
 // @match        *://*/*
@@ -106,7 +106,18 @@
   ]);
   const EXCLUDE_CLOSEST =
     'script,style,noscript,template,textarea,input,select,button,code,pre,kbd,samp,svg,math,canvas,iframe,video,audio,nav,' +
-    '[aria-hidden="true"],[contenteditable=""],[contenteditable="true"],.imtx-root,.imtx-translation';
+    '[aria-hidden="true"],[contenteditable=""],[contenteditable="true"],.imtx-root,.imtx-translation,.imtx-seg';
+
+  // Block containers whose loose, <br>-separated text is split into one unit per
+  // paragraph (bilingual interleave) instead of translating the whole body as a
+  // single blob. Limited to tags where injecting a <span> wrapper is always valid.
+  const SEGMENT_TAGS = new Set(['DIV', 'ARTICLE', 'SECTION', 'ASIDE', 'TD', 'BLOCKQUOTE']);
+
+  // Translation priority from the nearest landmark ancestor (lower = sooner), so
+  // the article body translates before page chrome (header/footer/aside) when
+  // several units enter the queue in the same tick.
+  const PRIORITY_TAGS = { ARTICLE: 0, MAIN: 0, SECTION: 2, ASIDE: 4, HEADER: 4, FOOTER: 4 };
+  const PRIORITY_DEFAULT = 3;
 
   function log(...args) {
     if (Store.get().debug) console.log(LOG_PREFIX, ...args);
@@ -394,6 +405,7 @@
         Renderer.setDone(unit.el, cached);
         return;
       }
+      if (unit.prio === undefined) unit.prio = Scanner.priority(unit.el);
       this.pending.push(unit);
       clearTimeout(this.flushTimer);
       this.flushTimer = setTimeout(() => this.flush(), FLUSH_DEBOUNCE);
@@ -402,6 +414,9 @@
     flush() {
       if (!this.pending.length) return;
       const units = this.pending.splice(0);
+      // Higher-priority regions (article/main) pack into earlier batches so they
+      // translate before chrome (header/footer/aside) queued in the same tick.
+      units.sort((a, b) => a.prio - b.prio);
       this.batchQueue.push(...Batcher.pack(units));
       this.pump();
     },
@@ -512,6 +527,7 @@
       if (el.getAttribute('aria-hidden') === 'true') return true;
       if (el.isContentEditable) return true;
       if (el.classList.contains('imtx-root') || el.classList.contains('imtx-translation')) return true;
+      if (el.classList.contains('imtx-seg')) return true; // our own paragraph wrapper
       return false;
     }
 
@@ -534,7 +550,7 @@
         if (n.nodeType === 3) { t += n.nodeValue; continue; }
         if (n.nodeType !== 1) continue;
         if (n.tagName === 'BR') { t += ' '; continue; }
-        if (n.classList && n.classList.contains('imtx-translation')) continue;
+        if (n.classList && (n.classList.contains('imtx-translation') || n.classList.contains('imtx-seg'))) continue;
         if (BLOCK_TAGS.has(n.tagName)) continue;
         t += n.textContent; // inline element (a, span, strong, …) belongs to this unit
       }
@@ -552,17 +568,96 @@
       out.push(el);
     }
 
+    // Plain text of one paragraph segment (a run of inline nodes between <br>s).
+    function segText(nodes) {
+      return nodes.map((n) => n.textContent).join('').replace(/\s+/g, ' ').trim();
+    }
+
+    // Partition an element's direct children into paragraph runs: maximal spans of
+    // inline content delimited by <br> runs, block children, or excluded subtrees.
+    // Each returned segment is an array of consecutive inline nodes.
+    function splitSegments(el) {
+      const segs = [];
+      let cur = [];
+      const flush = () => { if (cur.length) segs.push(cur); cur = []; };
+      for (const n of el.childNodes) {
+        if (n.nodeType === 3) { // text: keep, but never start a run on pure whitespace
+          if (n.nodeValue.trim() || cur.length) cur.push(n);
+          continue;
+        }
+        if (n.nodeType !== 1) continue;
+        if (n.tagName === 'BR') { flush(); continue; }
+        if (BLOCK_TAGS.has(n.tagName) || EXCLUDE_TAGS.has(n.tagName)) { flush(); continue; }
+        if (n.classList && (n.classList.contains('imtx-translation') ||
+            n.classList.contains('imtx-seg') || n.classList.contains('imtx-root'))) { flush(); continue; }
+        cur.push(n); // inline element belongs to the current paragraph
+      }
+      flush();
+      return segs;
+    }
+
+    // Wrap a paragraph segment's nodes in a block <span> so it can carry its own
+    // translation. Marked imtx-seg so the scanner treats it as a self-contained
+    // unit and never re-wraps or double-counts it (see isExcluded).
+    function wrapSegment(el, nodes) {
+      const w = document.createElement('span');
+      w.className = 'imtx-seg';
+      el.insertBefore(w, nodes[0]);
+      nodes.forEach((n) => w.appendChild(n));
+      return w;
+    }
+
+    // Translate a unit-tag element. A block container whose loose text breaks into
+    // 2+ paragraphs (Naver-style <br><br> bodies) is split so each paragraph is its
+    // own bilingual unit; everything else is translated as a single unit.
+    function collectUnit(el, out) {
+      const state = el.dataset.imtxState;
+      if (state === 'split') {
+        // Already segmented: (re)collect its paragraph wrappers — e.g. after a
+        // disable/enable cycle rewinds them from loading back to pending.
+        for (const child of el.children) {
+          if (child.classList && child.classList.contains('imtx-seg')) maybeUnit(child, out);
+        }
+        return;
+      }
+      if (state === 'done' || state === 'loading') return;
+      if (SEGMENT_TAGS.has(el.tagName)) {
+        const segs = splitSegments(el).filter((nodes) => {
+          const t = segText(nodes);
+          return t.length >= S().minTextLength && !isAlreadyTarget(t);
+        });
+        if (segs.length >= 2) {
+          el.dataset.imtxState = 'split';
+          for (const nodes of segs) maybeUnit(wrapSegment(el, nodes), out);
+          return;
+        }
+      }
+      maybeUnit(el, out);
+    }
+
+    // Translation priority from the nearest landmark ancestor (lower = sooner).
+    function priority(el) {
+      for (let n = el; n && n.nodeType === 1 && n !== document.body; n = n.parentElement) {
+        const role = n.getAttribute && n.getAttribute('role');
+        if (role === 'main' || role === 'article') return 0;
+        if (role === 'complementary' || role === 'banner' ||
+            role === 'contentinfo' || role === 'navigation') return 4;
+        const p = PRIORITY_TAGS[n.tagName];
+        if (p !== undefined) return p;
+      }
+      return PRIORITY_DEFAULT;
+    }
+
     function walk(el, out) {
       if (el.nodeType !== 1 || isExcluded(el)) return;
       const blocky = hasBlockChild(el);
-      // A leaf block — or a block container that also holds its own loose text
-      // (e.g. <article><div>player</div>para<br><br>para</article>, as on Naver
-      // news) — gets translated as a unit from its own inline text. maybeUnit
-      // ignores it if that text is too short.
-      if (UNIT_TAGS.has(el.tagName)) maybeUnit(el, out);
+      // A leaf block, a block container with its own loose text, or a multi-
+      // paragraph body — collectUnit decides whether to split per paragraph.
+      if (UNIT_TAGS.has(el.tagName)) collectUnit(el, out);
       // Descend into block-level children so nested blocks each become their own
       // unit. A pure leaf (unit tag, no block children) is fully captured above,
-      // so we don't recurse into its inline children.
+      // so we don't recurse into its inline children. Segment wrappers created
+      // just above are skipped by isExcluded.
       if (blocky || !UNIT_TAGS.has(el.tagName)) {
         for (const child of el.children) walk(child, out);
       }
@@ -580,6 +675,7 @@
         return out;
       },
       unitText,
+      priority,
     };
   })();
 
@@ -593,6 +689,8 @@
       margin-top: 0.2em;
       unicode-bidi: isolate;
     }
+    /* Each split paragraph is its own block so its translation sits beneath it. */
+    .imtx-seg { display: block; }
     .imtx-translation.imtx-style-faded {
       opacity: 0.6;
     }
@@ -834,7 +932,10 @@
       Store.onChange(refreshButtonVisibility); // hide/show when domains or target change
       dimButton();                // rest dimmed by default until first interaction
       refreshButtonVisibility();  // hide on opted-out sites / already-target pages
-      if (S().debug) window.__imtxBtn = btn; // test hook (debug only)
+      if (S().debug) {
+        window.__imtxBtn = btn; // test hooks (debug only)
+        window.__imtxPriority = Scanner.priority;
+      }
     }
 
     // Resting state: dimmed (unless dimming is disabled). Applied on load so the
@@ -1161,6 +1262,7 @@
           for (const node of m.addedNodes) {
             if (node.nodeType !== 1) continue;
             if (node.classList && (node.classList.contains('imtx-translation') ||
+                node.classList.contains('imtx-seg') ||
                 node.classList.contains('imtx-root'))) continue;
             this.mutationRoots.add(node);
           }
