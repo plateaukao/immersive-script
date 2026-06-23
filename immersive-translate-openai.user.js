@@ -5,8 +5,8 @@
 // @supportURL   https://github.com/plateaukao/immersive-script/issues
 // @updateURL    https://github.com/plateaukao/immersive-script/raw/refs/heads/main/immersive-translate-openai.user.js
 // @downloadURL  https://github.com/plateaukao/immersive-script/raw/refs/heads/main/immersive-translate-openai.user.js
-// @version      0.5.0
-// @description  Bilingual immersive web page translation via the OpenAI API or any OpenAI-compatible server
+// @version      0.6.0
+// @description  Bilingual immersive web page translation via Google Translate, Microsoft Translator (both free, no key), the OpenAI API, or any OpenAI-compatible server
 // @author       Daniel Kao
 // @match        *://*/*
 // @run-at       document-idle
@@ -36,11 +36,13 @@
   const RATE_INTERVAL = 1300;     // ms
   const RETRY_BACKOFF = [1000, 3000]; // ms; length = retry count
   const REQUEST_TIMEOUT = 60000;  // ms
+  const FREE_CONCURRENCY = 5;     // in-flight cap for Google/Microsoft (they fan out per paragraph)
   const FLUSH_DEBOUNCE = 150;     // ms, viewport queue
   const MUTATION_DEBOUNCE = 300;  // ms, dynamic content re-scan
 
   const DEFAULTS = {
     schemaVersion: 1,
+    engine: 'google',             // 'openai' | 'google' | 'bing'; default to free & keyless Google
     apiBaseUrl: 'https://api.openai.com/v1', // full base incl. /v1; /chat/completions is appended
     apiKeys: '',                  // comma-separated; random rotation per request
     model: 'gpt-4o-mini',
@@ -49,7 +51,7 @@
     systemPrompt: '',             // empty = built-in default; supports {{to}}
     userPromptTemplate: '',       // empty = built-in; single-paragraph requests only; {{to}}, {{text}}
     batchSize: 10,                // max segments per chat request (1 disables batching)
-    maxConcurrent: 2,
+    maxConcurrent: 2,             // in-flight cap for OpenAI; free engines use FREE_CONCURRENCY (5)
     minTextLength: 18,
     displayStyle: 'none',         // see DISPLAY_STYLES
     buttonPos: null,              // {right, bottom} in px, set by dragging the floating button
@@ -81,6 +83,22 @@
     'de': 'German',
     'es': 'Spanish',
   };
+
+  // Engine picker shown in settings. OpenAI needs a key; Google/Microsoft are free.
+  const ENGINE_OPTIONS = [
+    { value: 'openai', label: 'OpenAI / compatible (needs API key)' },
+    { value: 'google', label: 'Google Translate (free, no key)' },
+    { value: 'bing', label: 'Microsoft Translator (free, no key)' },
+  ];
+
+  // Free engines want non-BCP-47 codes for Chinese (Bing by script, Google by
+  // region); everything else (en, ja, fr, …) passes through unchanged.
+  const GOOGLE_LANG = { 'zh': 'zh-CN', 'zh-cn': 'zh-CN', 'zh-tw': 'zh-TW', 'zh-hans': 'zh-CN', 'zh-hant': 'zh-TW' };
+  const BING_LANG = { 'zh': 'zh-Hans', 'zh-cn': 'zh-Hans', 'zh-tw': 'zh-Hant', 'zh-hans': 'zh-Hans', 'zh-hant': 'zh-Hant' };
+  function mapLang(map, code) {
+    const l = String(code || '').toLowerCase();
+    return map[l] || code;
+  }
 
   // Block-level tags: presence as a child disqualifies a parent from being a leaf unit.
   const BLOCK_TAGS = new Set([
@@ -197,7 +215,7 @@
     const map = new Map();
     return {
       key(text) {
-        return `${S().targetLang}|${S().model}|${text}`;
+        return `${S().engine}|${S().targetLang}|${S().model}|${text}`;
       },
       get(text) {
         return map.get(this.key(text));
@@ -230,92 +248,173 @@
   }
 
   // ===================================================================
-  // 5. TRANSLATOR (OpenAI-compatible chat client)
+  // 5. TRANSLATION ENGINES (OpenAI chat + Google/Microsoft free web APIs)
   // ===================================================================
 
   class ApiError extends Error {
     constructor(kind, status, message, retryAfter) {
       super(message);
-      this.kind = kind; // auth | rate | server | network | parse
+      this.kind = kind;     // auth | rate | server | network | parse
       this.status = status;
-      this.retryAfter = retryAfter; // seconds, from Retry-After header if present
+      this.retryAfter = retryAfter; // seconds, from a Retry-After header if present
     }
   }
 
-  const Translator = {
-    pickKey() {
-      const keys = S().apiKeys.split(',').map((k) => k.trim()).filter(Boolean);
-      if (!keys.length) return '';
-      return keys[Math.floor(Math.random() * keys.length)];
+  // Rate-limited GM_xmlhttpRequest, resolving with the raw response. Every engine
+  // (chat, Google/Bing segment, Bing token fetch) shares the one limiter, so an
+  // engine that fans out a request per paragraph is throttled like a batch.
+  async function request(opts) {
+    await RateLimiter.acquire();
+    return new Promise((resolve, reject) => {
+      GM_xmlhttpRequest({
+        method: opts.method, url: opts.url, headers: opts.headers, data: opts.data,
+        timeout: REQUEST_TIMEOUT,
+        onload: resolve,
+        onerror: () => reject(new ApiError('network', 0, 'network error (check connectivity / @connect)')),
+        ontimeout: () => reject(new ApiError('network', 0, 'request timed out')),
+      });
+    });
+  }
+
+  // Map an HTTP error response to an ApiError. authFatal (OpenAI only) makes
+  // 401/403 a fatal 'auth' that pauses the queue; free engines retry instead,
+  // since a 4xx there is a temporary block rather than a bad key.
+  function httpError(res, msg, authFatal) {
+    const s = res.status;
+    if (authFatal && (s === 401 || s === 403)) return new ApiError('auth', s, msg);
+    if (s === 429) {
+      const m = /retry-after:\s*(\d+)/i.exec(res.responseHeaders || '');
+      return new ApiError('rate', s, msg, m ? parseInt(m[1], 10) : undefined);
+    }
+    return new ApiError('server', s, msg);
+  }
+
+  function pickKey() {
+    const keys = S().apiKeys.split(',').map((k) => k.trim()).filter(Boolean);
+    return keys.length ? keys[Math.floor(Math.random() * keys.length)] : '';
+  }
+
+  // One OpenAI-compatible chat completion. Returns the assistant message text.
+  async function chat(messages) {
+    const url = S().apiBaseUrl.replace(/\/+$/, '') + '/chat/completions';
+    const key = pickKey();
+    const headers = { 'Content-Type': 'application/json' };
+    if (key) headers.Authorization = 'Bearer ' + key;
+    const data = JSON.stringify({ model: S().model, temperature: S().temperature, stream: false, messages });
+    log('request', url, messages);
+    const res = await request({ method: 'POST', url, headers, data });
+    let json = null;
+    try { json = JSON.parse(res.responseText); } catch (e) { /* handled below */ }
+    if (res.status === 200) {
+      const content = json && json.choices && json.choices[0] &&
+        json.choices[0].message && json.choices[0].message.content;
+      if (typeof content === 'string') return content;
+      throw new ApiError('parse', 200, 'unexpected response: ' + String(res.responseText).slice(0, 300));
+    }
+    const msg = (json && json.error && json.error.message) ||
+      String(res.responseText).slice(0, 300) || ('HTTP ' + res.status);
+    throw httpError(res, msg, true);
+  }
+
+  // Each engine: translate(texts) -> Promise<string[]> aligned to texts, throwing
+  // ApiError on failure. packSize() caps segments per call; needsKey gates enable().
+  // Free engines share this plumbing: one keyless request per paragraph.
+  const FREE_ENGINE = {
+    needsKey: false,
+    packSize: () => 1,
+    concurrency: () => FREE_CONCURRENCY,
+    translate(texts) { return Promise.all(texts.map((t) => this.one(t))); },
+  };
+
+  const Engines = {
+    // OpenAI / compatible: marker-batched chat, falling back to one request per
+    // paragraph when the model mangles the %%N%% markers.
+    openai: {
+      needsKey: true,
+      packSize: () => S().batchSize,
+      concurrency: () => S().maxConcurrent,
+      async translate(texts) {
+        if (texts.length === 1) return [(await chat(Batcher.singleMessages(texts[0]))).trim()];
+        const content = await chat(Batcher.batchMessages(texts));
+        const parsed = Batcher.parse(content, texts.length);
+        if (parsed) return texts.map((_, i) => parsed.get(i + 1));
+        warn('batch marker mismatch, falling back to per-paragraph. Raw reply:', content);
+        return Promise.all(texts.map((t) => chat(Batcher.singleMessages(t)).then((c) => c.trim())));
+      },
     },
 
-    chat(messages) {
-      const url = S().apiBaseUrl.replace(/\/+$/, '') + '/chat/completions';
-      const key = this.pickKey();
-      const headers = { 'Content-Type': 'application/json' };
-      if (key) headers.Authorization = 'Bearer ' + key;
-      const body = JSON.stringify({
-        model: S().model,
-        temperature: S().temperature,
-        stream: false,
-        messages,
-      });
-      log('request', url, messages);
-      return new Promise((resolve, reject) => {
-        GM_xmlhttpRequest({
-          method: 'POST',
-          url,
-          headers,
-          data: body,
-          timeout: REQUEST_TIMEOUT,
-          onload(res) {
-            let json = null;
-            try {
-              json = JSON.parse(res.responseText);
-            } catch (e) { /* handled below */ }
-            if (res.status === 200) {
-              const content = json && json.choices && json.choices[0] &&
-                json.choices[0].message && json.choices[0].message.content;
-              if (typeof content === 'string') return resolve(content);
-              return reject(new ApiError('parse', 200, 'unexpected response shape: ' +
-                String(res.responseText).slice(0, 300)));
-            }
-            const apiMsg = (json && json.error && json.error.message) ||
-              String(res.responseText).slice(0, 300) || ('HTTP ' + res.status);
-            if (res.status === 401 || res.status === 403) {
-              return reject(new ApiError('auth', res.status, apiMsg));
-            }
-            if (res.status === 429) {
-              const m = /retry-after:\s*(\d+)/i.exec(res.responseHeaders || '');
-              return reject(new ApiError('rate', 429, apiMsg, m ? parseInt(m[1], 10) : undefined));
-            }
-            reject(new ApiError('server', res.status, apiMsg));
-          },
-          onerror() {
-            reject(new ApiError('network', 0, 'network error (check API base URL / @connect)'));
-          },
-          ontimeout() {
-            reject(new ApiError('network', 0, 'request timed out'));
-          },
-        });
-      });
-    },
+    // Google Translate via the free, keyless gtx endpoint (auto source detection).
+    google: Object.assign({}, FREE_ENGINE, {
+      async one(text) {
+        const url = 'https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto' +
+          '&tl=' + encodeURIComponent(mapLang(GOOGLE_LANG, S().targetLang)) +
+          '&dt=t&q=' + encodeURIComponent(text);
+        const res = await request({ method: 'GET', url });
+        if (res.status !== 200) throw httpError(res, 'google HTTP ' + res.status);
+        let data = null;
+        try { data = JSON.parse(res.responseText); } catch (e) { /* handled below */ }
+        // data[0] = [[translatedChunk, originalChunk, …], …]; concatenate chunks.
+        if (!data || !Array.isArray(data[0])) throw new ApiError('parse', 200, 'google: bad response');
+        return data[0].map((seg) => (seg && seg[0]) || '').join('').trim();
+      },
+    }),
+
+    // Microsoft Translator via the free Bing web endpoint, using a short-lived
+    // token scraped from the translator page (cached until expiry, refreshed once).
+    bing: Object.assign({}, FREE_ENGINE, {
+      _auth: null,
+      async auth(force) {
+        const a = this._auth;
+        if (!force && a && Date.now() - a.at < a.ttl) return a;
+        const res = await request({ method: 'GET', url: 'https://www.bing.com/translator' });
+        if (res.status !== 200) throw httpError(res, 'bing token HTTP ' + res.status);
+        const html = res.responseText;
+        const ig = /IG:"([^"]+)"/.exec(html);
+        const iid = /data-iid="([^"]+)"/.exec(html);
+        const p = /params_AbusePreventionHelper\s*=\s*\[\s*(\d+)\s*,\s*"([^"]+)"\s*,\s*(\d+)\s*\]/.exec(html);
+        if (!ig || !p) throw new ApiError('parse', 200, 'bing: cannot parse auth params');
+        return (this._auth = { ig: ig[1], iid: iid ? iid[1] : 'translator.5028',
+          key: p[1], token: p[2], ttl: parseInt(p[3], 10) || 3600000, at: Date.now() });
+      },
+      async one(text, retried) {
+        const a = await this.auth(false);
+        const url = 'https://www.bing.com/ttranslatev3?isVertical=1&IG=' +
+          encodeURIComponent(a.ig) + '&IID=' + encodeURIComponent(a.iid);
+        const data = 'fromLang=auto-detect&to=' + encodeURIComponent(mapLang(BING_LANG, S().targetLang)) +
+          '&text=' + encodeURIComponent(text) +
+          '&token=' + encodeURIComponent(a.token) + '&key=' + encodeURIComponent(a.key);
+        const res = await request({ method: 'POST', url,
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, data });
+        let json = null;
+        try { json = JSON.parse(res.responseText); } catch (e) { /* handled below */ }
+        const tr = json && json[0] && json[0].translations && json[0].translations[0];
+        if (res.status === 200 && tr) return tr.text;
+        // A stale token gives a 4xx or a {statusCode} object: refresh once, retry.
+        if (!retried) { await this.auth(true); return this.one(text, true); }
+        if (res.status !== 200) throw httpError(res, 'bing HTTP ' + res.status);
+        throw new ApiError('parse', 200, 'bing: ' + String(res.responseText).slice(0, 200));
+      },
+    }),
   };
+
+  const currentEngine = () => Engines[S().engine] || Engines.openai;
 
   // ===================================================================
   // 6. BATCHER (indexed-marker protocol + prompts)
   // ===================================================================
 
   const Batcher = {
-    // Greedily pack pending units into batches bounded by batchSize and MAX_BATCH_CHARS.
+    // Greedily pack pending units into batches bounded by the engine's pack size
+    // and MAX_BATCH_CHARS. Free engines use packSize 1 (one request per paragraph).
     pack(units) {
       const batches = [];
       let current = [];
       let chars = 0;
+      const packSize = currentEngine().packSize();
       for (const u of units) {
         const len = u.text.length;
         if (current.length &&
-            (current.length >= S().batchSize || chars + len > MAX_BATCH_CHARS)) {
+            (current.length >= packSize || chars + len > MAX_BATCH_CHARS)) {
           batches.push(current);
           current = [];
           chars = 0;
@@ -344,9 +443,9 @@
       ];
     },
 
-    batchMessages(units) {
+    batchMessages(texts) {
       const header = BATCH_PROMPT_HEADER.replace(/\{\{to\}\}/g, langName(S().targetLang));
-      const body = units.map((u, i) => `%%${i + 1}%%\n${u.text}`).join('\n');
+      const body = texts.map((t, i) => `%%${i + 1}%%\n${t}`).join('\n');
       return [
         { role: 'system', content: this.systemPrompt() },
         { role: 'user', content: header + '\n\n' + body },
@@ -441,7 +540,7 @@
     },
 
     pump() {
-      while (!this.paused && this.inFlight < S().maxConcurrent && this.batchQueue.length) {
+      while (!this.paused && this.inFlight < currentEngine().concurrency() && this.batchQueue.length) {
         const batch = this.batchQueue.shift();
         this.inFlight++;
         // The floating button stays static during translation (e-ink friendly).
@@ -455,14 +554,11 @@
     async dispatch(batch) {
       const gen = this.generation;
       batch.forEach((u) => Renderer.setLoading(u.el));
-      const single = batch.length === 1;
-      const messages = single
-        ? Batcher.singleMessages(batch[0].text)
-        : Batcher.batchMessages(batch);
+      const texts = batch.map((u) => u.text);
 
-      let content;
+      let translations;
       try {
-        content = await this.requestWithRetry(messages);
+        translations = await this.requestWithRetry(() => currentEngine().translate(texts));
       } catch (err) {
         if (gen === this.generation) {
           batch.forEach((u) => Renderer.setError(u.el, err.message));
@@ -471,20 +567,14 @@
         return;
       }
 
-      if (single) {
-        this.deliver(batch[0], content.trim(), gen);
+      if (!Array.isArray(translations) || translations.length !== batch.length) {
+        warn('engine returned wrong translation count', translations);
+        if (gen === this.generation) {
+          batch.forEach((u) => Renderer.setError(u.el, 'engine response mismatch'));
+        }
         return;
       }
-      const parsed = Batcher.parse(content, batch.length);
-      if (parsed) {
-        batch.forEach((u, i) => this.deliver(u, parsed.get(i + 1), gen));
-      } else {
-        // Marker mismatch: silently fall back to one request per paragraph.
-        warn('batch marker mismatch, falling back to per-paragraph. Raw reply:', content);
-        if (gen === this.generation) {
-          this.batchQueue.unshift(...batch.map((u) => [u]));
-        }
-      }
+      batch.forEach((u, i) => this.deliver(u, (translations[i] || '').trim(), gen));
     },
 
     deliver(unit, translation, gen) {
@@ -492,7 +582,9 @@
       if (gen === this.generation) Renderer.setDone(unit.el, translation);
     },
 
-    async requestWithRetry(messages) {
+    // Retry an engine call with backoff. Rate limiting happens per HTTP request
+    // (inside request()), so this only adds the backoff/retry envelope.
+    async requestWithRetry(fn) {
       let lastErr;
       for (let attempt = 0; attempt <= RETRY_BACKOFF.length; attempt++) {
         if (attempt > 0) {
@@ -502,9 +594,8 @@
           }
           await sleep(wait);
         }
-        await RateLimiter.acquire();
         try {
-          return await Translator.chat(messages);
+          return await fn();
         } catch (err) {
           lastErr = err;
           if (err.kind === 'auth') throw err; // retrying won't fix a bad key
@@ -787,17 +878,22 @@
   // 10. UI (shadow DOM: floating button, settings panel, toast)
   // ===================================================================
 
+  // Fields marked openaiOnly are hidden unless the OpenAI engine is selected
+  // (Google/Microsoft are keyless and have no model/prompt/batch knobs).
   const SETTING_FIELDS = [
-    { key: 'apiBaseUrl', label: 'API Base URL', type: 'text',
+    { key: 'engine', label: 'Translation engine', type: 'select', options: ENGINE_OPTIONS,
+      hint: 'Google and Microsoft are free and need no key. OpenAI needs an API key (or a compatible server URL).' },
+    { key: 'apiBaseUrl', label: 'API Base URL', type: 'text', openaiOnly: true,
       hint: 'OpenAI-compatible base, including /v1 (e.g. http://localhost:8787/v1)' },
-    { key: 'apiKeys', label: 'API Key(s)', type: 'password',
+    { key: 'apiKeys', label: 'API Key(s)', type: 'password', openaiOnly: true,
       hint: 'Comma-separate multiple keys to rotate randomly' },
-    { key: 'model', label: 'Model', type: 'text' },
+    { key: 'model', label: 'Model', type: 'text', openaiOnly: true },
     { key: 'targetLang', label: 'Target language', type: 'text', hint: 'BCP-47 code, e.g. zh-TW, en, ja' },
-    { key: 'temperature', label: 'Temperature', type: 'number', step: '0.1', min: '0', max: '2' },
-    { key: 'batchSize', label: 'Batch size', type: 'number', min: '1', max: '50',
+    { key: 'temperature', label: 'Temperature', type: 'number', step: '0.1', min: '0', max: '2', openaiOnly: true },
+    { key: 'batchSize', label: 'Batch size', type: 'number', min: '1', max: '50', openaiOnly: true,
       hint: 'Paragraphs per request; 1 disables batching' },
-    { key: 'maxConcurrent', label: 'Max concurrent requests', type: 'number', min: '1', max: '8' },
+    { key: 'maxConcurrent', label: 'Max concurrent requests', type: 'number', min: '1', max: '8', openaiOnly: true,
+      hint: 'OpenAI only; Google and Microsoft use a fixed 5' },
     { key: 'minTextLength', label: 'Min paragraph length', type: 'number', min: '1', max: '500' },
     { key: 'displayStyle', label: 'Translation style', type: 'select', options: DISPLAY_STYLES },
     { key: 'idleDimSeconds', label: 'Dim button after (seconds)', type: 'number', min: '0', max: '600',
@@ -805,9 +901,9 @@
     { key: 'idleDimOpacity', label: 'Dimmed button opacity', type: 'number', step: '0.05', min: '0.05', max: '1',
       hint: '0.3 ≈ 70% transparent; 1 = fully opaque' },
     { key: 'hotkey', label: 'Toggle hotkey', type: 'text', hint: 'e.g. Alt+T' },
-    { key: 'systemPrompt', label: 'System prompt override', type: 'textarea',
+    { key: 'systemPrompt', label: 'System prompt override', type: 'textarea', openaiOnly: true,
       hint: 'Empty = built-in. {{to}} = target language. Batched requests need the %%N%% marker instruction.' },
-    { key: 'userPromptTemplate', label: 'User prompt override', type: 'textarea',
+    { key: 'userPromptTemplate', label: 'User prompt override', type: 'textarea', openaiOnly: true,
       hint: 'Single-paragraph requests only. {{to}}, {{text}}. Empty = built-in.' },
     { key: 'autoDomains', label: 'Always-translate domains', type: 'textarea', list: true, hint: 'One hostname per line' },
     { key: 'hiddenButtonDomains', label: 'Hide-button domains', type: 'textarea', list: true,
@@ -1043,9 +1139,12 @@
       const id = 'f-' + f.key;
       let input;
       if (f.type === 'select') {
-        const opts = f.options
-          .map((o) => `<option value="${o}"${o === value ? ' selected' : ''}>${o}</option>`)
-          .join('');
+        // Options are trusted constants (strings, or {value,label} pairs).
+        const opts = f.options.map((o) => {
+          const val = typeof o === 'object' ? o.value : o;
+          const label = typeof o === 'object' ? o.label : o;
+          return `<option value="${val}"${val === value ? ' selected' : ''}>${label}</option>`;
+        }).join('');
         input = `<select id="${id}">${opts}</select>`;
       } else if (f.type === 'textarea') {
         const v = f.list ? (value || []).join('\n') : (value || '');
@@ -1060,7 +1159,7 @@
         input = `<input type="${f.type}" id="${id}" value="${escapeHtml(String(value ?? ''))}"${extra}>`;
       }
       const hint = f.hint ? `<div class="hint">${f.hint}</div>` : '';
-      return `<div class="field"><label for="${id}">${f.label}</label>${input}${hint}</div>`;
+      return `<div class="field" data-key="${f.key}"><label for="${id}">${f.label}</label>${input}${hint}</div>`;
     }
 
     function escapeHtml(s) {
@@ -1088,7 +1187,7 @@
       overlay.className = 'overlay';
       overlay.innerHTML = `
         <div class="panel">
-          <h2>Immersive Translate (OpenAI) — Settings</h2>
+          <h2>Immersive Translate — Settings</h2>
           ${hintMessage ? `<div class="field" style="color:#c62828">${hintMessage}</div>` : ''}
           ${SETTING_FIELDS.map((f) => fieldHtml(f, s[f.key])).join('')}
           <div class="row">
@@ -1104,6 +1203,17 @@
       panel = overlay;
       shadow.appendChild(overlay);
 
+      // OpenAI-only fields (key, model, prompts, …) show only for the OpenAI engine.
+      const engineSelect = overlay.querySelector('#f-engine');
+      const applyEngineVisibility = () => {
+        SETTING_FIELDS.forEach((f) => {
+          const wrap = f.openaiOnly && overlay.querySelector(`.field[data-key="${f.key}"]`);
+          if (wrap) wrap.style.display = engineSelect.value === 'openai' ? '' : 'none';
+        });
+      };
+      engineSelect.addEventListener('change', applyEngineVisibility);
+      applyEngineVisibility();
+
       overlay.querySelector('#close').addEventListener('click', closeSettings);
       overlay.querySelector('#save').addEventListener('click', () => {
         Store.save(readForm());
@@ -1116,9 +1226,9 @@
         out.className = 'test-result';
         out.textContent = 'Testing…';
         try {
-          const reply = await Translator.chat(Batcher.singleMessages('Hello, world!'));
+          const reply = await currentEngine().translate(['Hello, world!']);
           out.className = 'test-result ok';
-          out.textContent = '✓ ' + reply.trim().slice(0, 60);
+          out.textContent = '✓ ' + String(reply[0] || '').trim().slice(0, 60);
           Scheduler.resume();
         } catch (err) {
           out.className = 'test-result bad';
@@ -1241,7 +1351,8 @@
 
     enable() {
       if (this.enabled) return;
-      if (!S().apiKeys.trim() && S().apiBaseUrl === DEFAULTS.apiBaseUrl) {
+      // Only the OpenAI engine needs credentials; Google/Microsoft are keyless.
+      if (currentEngine().needsKey && !S().apiKeys.trim() && S().apiBaseUrl === DEFAULTS.apiBaseUrl) {
         UI.openSettings('Please configure an API key (or a custom server URL) first.');
         return;
       }

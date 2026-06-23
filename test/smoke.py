@@ -9,10 +9,13 @@ Prereqs running locally:
 Run:
     python3 test/smoke.py
 """
+import os
 import sys
 from playwright.sync_api import sync_playwright
 
-HARNESS = 'http://localhost:8000/test/harness.html'
+# Defaults to the readable build; set IMTX_HARNESS to point at the minified
+# harness (test/harness.min.html) to run the same checks against .min.user.js.
+HARNESS = os.environ.get('IMTX_HARNESS', 'http://localhost:8000/test/harness.html')
 PASS, FAIL = 0, 0
 
 
