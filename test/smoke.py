@@ -159,6 +159,31 @@ with sync_playwright() as p:
               d.remove(); return pr;
           }""") == 3)
 
+    # --- inline-script leaf blocks (Yahoo-style): a <div> wrapping a tracking
+    #     <script>/<style> must contribute only its visible text, never the raw
+    #     JavaScript source. A script-only <div> is not a unit at all. ---
+    page.goto('http://localhost:8000/test/pages/inline-script.html')
+    page.wait_for_function("window.__imtxBtn", timeout=5000)
+    page.keyboard.press('Alt+KeyT')
+    page.wait_for_function(
+        "document.querySelector('#js-leak .imtx-translation') !== null && "
+        "document.querySelector('#nested .imtx-translation') !== null", timeout=10000)
+
+    all_trans = page.eval_on_selector_all(
+        '.imtx-translation', 'els => els.map(e => e.textContent).join("\\n")')
+    check('no JavaScript source leaks into any translation',
+          not any(tok in all_trans for tok in
+                  ('YAHOO', 'ualcmds', 'function', 'var ', 'document.getElementById', '=>')))
+    check('leaf div with inline script: only visible text translated',
+          page.text_content('#js-leak .imtx-translation') ==
+          '【譯】Visible lead text shown to the reader before a tracking widget. '
+          'Trailing visible text after the inline script.')
+    check('script-only div is not a translation unit',
+          page.eval_on_selector('#js-only', 'e => !e.dataset.imtxState'))
+    check('nested script inside an inline span is stripped, words kept',
+          page.text_content('#nested .imtx-translation') ==
+          '【譯】Real sentence with a span that hides a tracker inside it, long enough to translate.')
+
     browser.close()
 
 print(f'\n{PASS} passed, {FAIL} failed')

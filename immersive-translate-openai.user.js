@@ -5,7 +5,7 @@
 // @supportURL   https://github.com/plateaukao/immersive-script/issues
 // @updateURL    https://github.com/plateaukao/immersive-script/raw/refs/heads/main/immersive-translate-openai.user.js
 // @downloadURL  https://github.com/plateaukao/immersive-script/raw/refs/heads/main/immersive-translate-openai.user.js
-// @version      0.6.0
+// @version      0.6.1
 // @description  Bilingual immersive web page translation via Google Translate, Microsoft Translator (both free, no key), the OpenAI API, or any OpenAI-compatible server
 // @author       Daniel Kao
 // @match        *://*/*
@@ -122,6 +122,11 @@
     'BUTTON', 'CODE', 'PRE', 'KBD', 'SAMP', 'SVG', 'MATH', 'CANVAS', 'IFRAME',
     'VIDEO', 'AUDIO', 'NAV',
   ]);
+  // Excluded tags that render nothing at all. When one sits between two text runs
+  // it must NOT split a paragraph (the visible text on either side is contiguous):
+  // unlike a visible exclude such as IFRAME/VIDEO, an inline <script>/<style> is a
+  // zero-width gap, common on portals like news.yahoo.co.jp.
+  const INVISIBLE_TAGS = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE']);
   const EXCLUDE_CLOSEST =
     'script,style,noscript,template,textarea,input,select,button,code,pre,kbd,samp,svg,math,canvas,iframe,video,audio,nav,' +
     '[aria-hidden="true"],[contenteditable=""],[contenteditable="true"],.imtx-root,.imtx-translation,.imtx-seg';
@@ -629,21 +634,39 @@
       return false;
     }
 
+    // Visible text of an inline node, gathered recursively but with excluded
+    // subtrees stripped out. Crucially this drops inline <script>/<style>/<noscript>
+    // descendants: a leaf <div> wrapping a tracking/promo <script> (common on
+    // news.yahoo.co.jp and other portals) would otherwise contribute its raw
+    // JavaScript source as "translatable" text. <br> collapses to a space.
+    function inlineText(node) {
+      if (node.nodeType === 3) return node.nodeValue;
+      if (node.nodeType !== 1) return '';
+      if (EXCLUDE_TAGS.has(node.tagName)) return '';
+      if (node.classList && (node.classList.contains('imtx-translation') ||
+          node.classList.contains('imtx-seg') || node.classList.contains('imtx-root'))) return '';
+      if (node.tagName === 'BR') return ' ';
+      let t = '';
+      for (const c of node.childNodes) t += inlineText(c);
+      return t;
+    }
+
     // The element's own translatable text: direct text nodes plus inline-element
     // descendants, but NOT block-level element children — each of those is its
-    // own unit. Skips excluded subtrees and any translation wrapper we injected.
-    // <br> becomes a space so loose paragraphs (e.g. Naver-style `text<br><br>text`
-    // bodies) don't run together. For a plain leaf (no block children) this is
-    // identical to its full text.
+    // own unit. Skips excluded subtrees (script/style/…) and any translation
+    // wrapper we injected. <br> becomes a space so loose paragraphs (e.g.
+    // Naver-style `text<br><br>text` bodies) don't run together. For a plain leaf
+    // (no block children) this is identical to its full visible text.
     function unitText(el) {
       let t = '';
       for (const n of el.childNodes) {
         if (n.nodeType === 3) { t += n.nodeValue; continue; }
         if (n.nodeType !== 1) continue;
         if (n.tagName === 'BR') { t += ' '; continue; }
+        if (EXCLUDE_TAGS.has(n.tagName)) continue; // inline <script>/<style>/… is not visible text
         if (n.classList && (n.classList.contains('imtx-translation') || n.classList.contains('imtx-seg'))) continue;
         if (BLOCK_TAGS.has(n.tagName)) continue;
-        t += n.textContent; // inline element (a, span, strong, …) belongs to this unit
+        t += inlineText(n); // inline element (a, span, strong, …) belongs to this unit
       }
       return t.replace(/\s+/g, ' ').trim();
     }
@@ -660,8 +683,9 @@
     }
 
     // Plain text of one paragraph segment (a run of inline nodes between <br>s).
+    // Uses inlineText so an inline <script>/<style> inside the run is stripped too.
     function segText(nodes) {
-      return nodes.map((n) => n.textContent).join('').replace(/\s+/g, ' ').trim();
+      return nodes.map(inlineText).join('').replace(/\s+/g, ' ').trim();
     }
 
     // Partition an element's direct children into paragraph runs: maximal spans of
@@ -678,6 +702,7 @@
         }
         if (n.nodeType !== 1) continue;
         if (n.tagName === 'BR') { flush(); continue; }
+        if (INVISIBLE_TAGS.has(n.tagName)) continue; // zero-width: skip without breaking the run
         if (BLOCK_TAGS.has(n.tagName) || EXCLUDE_TAGS.has(n.tagName)) { flush(); continue; }
         if (n.classList && (n.classList.contains('imtx-translation') ||
             n.classList.contains('imtx-seg') || n.classList.contains('imtx-root'))) { flush(); continue; }

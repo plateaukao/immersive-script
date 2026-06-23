@@ -1,6 +1,6 @@
 {
   "name": "immersive-translate-openai",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "private": true,
   "description": "Build tooling for the Immersive Translate userscript: minify the readable source into a distributable .min.user.js",
   "type": "module",

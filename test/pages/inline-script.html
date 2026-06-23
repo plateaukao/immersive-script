@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Inline-script leaf blocks (Yahoo-style) — imtx test</title>
+<style>body { max-width: 720px; margin: 1rem auto; font: 15px/1.5 sans-serif; }</style>
+</head>
+<body>
+<h1>Inline script/style inside content blocks must not be translated</h1>
+
+<!-- Mirrors news.yahoo.co.jp: portal article pages wrap tracking/promo <script>
+     (and inline <style>) in bare <div>s that have NO block-level children, so the
+     scanner treats them as leaf translation units. unitText must strip those
+     excluded subtrees; otherwise the raw JavaScript source gets sent to the
+     translation engine and rendered as nonsense. Regression guard. -->
+<article id="content">
+  <!-- A leaf <div>: visible text on BOTH sides of an inline tracking script + style. -->
+  <div id="js-leak">Visible lead text shown to the reader before a tracking widget.<script>window.YAHOO=window.YAHOO||{};YAHOO.JP.foo=function(){var x=document.getElementById('x');return x;};</script><style>.promo{display:none}</style> Trailing visible text after the inline script.</div>
+
+  <!-- A <div> whose only content is a script: after the fix its unitText is empty,
+       so it is not a translation unit at all (no imtx state written). -->
+  <div id="js-only"><script>window.ualcmds=window.ualcmds||[];function hitPageView(){ual('hit','pageview');}</script></div>
+
+  <!-- A real paragraph whose inline <span> hides a nested <script>: the recursive
+       text gather must skip the nested script while keeping the visible words. -->
+  <p id="nested">Real sentence with a <span>span that hides a <script>var leak='nested script source';</script>tracker</span> inside it, long enough to translate.</p>
+</article>
+
+<script>
+  // ---- GM_* shims (mirrors harness.html; enough to run the userscript) ----
+  const _store = {
+    'imtx:settings': JSON.stringify({
+      engine: 'openai',
+      apiBaseUrl: 'http://localhost:8787/v1',
+      apiKeys: 'test',
+      batchSize: 4,
+      debug: true,
+    }),
+  };
+  window.__gmStore = _store;
+  window.GM_getValue = (k, d) => (k in _store ? _store[k] : d);
+  window.GM_setValue = (k, v) => { _store[k] = v; };
+  window.GM_addStyle = (css) => {
+    const s = document.createElement('style');
+    s.textContent = css;
+    document.head.appendChild(s);
+  };
+  window.GM_registerMenuCommand = () => {};
+  window.GM_xmlhttpRequest = (opts) => {
+    fetch(opts.url, { method: opts.method, headers: opts.headers, body: opts.data })
+      .then(async (res) => {
+        const text = await res.text();
+        const headers = [...res.headers].map(([k, v]) => `${k}: ${v}`).join('\r\n');
+        opts.onload({ status: res.status, responseText: text, responseHeaders: headers });
+      })
+      .catch(() => opts.onerror && opts.onerror());
+  };
+</script>
+<script src="../../immersive-translate-openai.user.js"></script>
+</body>
+</html>
